@@ -1,0 +1,67 @@
+name: macOS GTK Build (.app + .dmg)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon (arm64)
+          - runner: macos-14
+            arch: arm64
+          # Intel (x86_64)
+          - runner: macos-13
+            arch: x64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Homebrew update
+        run: brew update
+
+      - name: Install deps (GTK3 + JSON-GLib + tools)
+        run: |
+          brew install pkg-config gtk+3 json-glib adwaita-icon-theme dylibbundler
+
+      - name: Build binary with Makefile
+        run: |
+          make clean
+          make
+
+      - name: Prepare icon (optional)
+        run: |
+          # Если нет iconset, шаг пройдёт впустую
+          if [ -d mac/AppIcon.iconset ]; then
+            mkdir -p assets
+            iconutil -c icns mac/AppIcon.iconset -o assets/icon.icns
+          fi
+
+      - name: Bundle .app
+        run: |
+          bash mac/bundle.sh
+
+      - name: Create DMG
+        run: |
+          ARCH_SUFFIX="-${{ matrix.arch }}"
+          bash mac/create-dmg.sh "$ARCH_SUFFIX"
+
+      - name: Show otool (debug)
+        run: |
+          echo "Linked libs of binary:"
+          otool -L dist/UserDoc.app/Contents/MacOS/userdoc || true
+
+      - name: Upload artifact (.app + .dmg)
+        uses: actions/upload-artifact@v4
+        with:
+          name: UserDoc-${{ matrix.arch }}
+          path: |
+            dist/UserDoc.app
+            dist/UserDoc-${{ matrix.arch }}.dmg
