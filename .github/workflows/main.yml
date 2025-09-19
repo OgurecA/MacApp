@@ -11,42 +11,67 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Apple Silicon (arm64)
           - runner: macos-14
             arch: arm64
-          # Intel (x86_64)
           - runner: macos-13
             arch: x64
 
     runs-on: ${{ matrix.runner }}
 
+    env:
+      HOMEBREW_NO_ENV_HINTS: 1
+      HOMEBREW_NO_ANALYTICS: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_AUTO_UPDATE: 1
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Homebrew update
-        run: brew update
-
-      - name: Install deps (GTK3 + JSON-GLib + tools)
+      - name: Brew prep (reset + doctor)
         run: |
-          brew install pkg-config gtk+3 json-glib adwaita-icon-theme dylibbundler
+          brew update-reset || true
+          brew doctor || true
+
+      - name: Retry helper
+        id: retry
+        run: |
+          cat > /tmp/retry.sh <<'SH'
+          #!/usr/bin/env bash
+          set -e
+          i=0
+          until "$@"; do
+            i=$((i+1))
+            if [ $i -ge 3 ]; then exit 1; fi
+            echo "Retry $i/3 after failure..."
+            sleep 15
+          done
+          SH
+          chmod +x /tmp/retry.sh
+
+      - name: Install core tools
+        run: |
+          /tmp/retry.sh brew install pkg-config || brew reinstall pkg-config
+          /tmp/retry.sh brew install dylibbundler || brew reinstall dylibbundler
+
+      - name: Install GTK stack
+        run: |
+          # На x64 иногда помогает поставить базовые либы явно
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            /tmp/retry.sh brew install glib cairo pango harfbuzz gdk-pixbuf || true
+          fi
+          /tmp/retry.sh brew install json-glib
+          /tmp/retry.sh brew install gtk+3
+          /tmp/retry.sh brew install adwaita-icon-theme || true
+          brew list --versions
 
       - name: Build binary with Makefile
         run: |
           make clean
           make
 
-      - name: Prepare icon (optional)
-        run: |
-          # Если нет iconset, шаг пройдёт впустую
-          if [ -d mac/AppIcon.iconset ]; then
-            mkdir -p assets
-            iconutil -c icns mac/AppIcon.iconset -o assets/icon.icns
-          fi
-
       - name: Bundle .app
-        run: |
-          bash mac/bundle.sh
+        run: bash mac/bundle.sh
 
       - name: Create DMG
         run: |
